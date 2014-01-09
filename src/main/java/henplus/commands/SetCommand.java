@@ -1,7 +1,7 @@
 /*
  * This is free software, licensed under the Gnu Public License (GPL)
  * get a copy from <http://www.gnu.org/licenses/gpl.html>
- * $Id: SetCommand.java,v 1.25 2006-11-29 17:57:53 hzeller Exp $ 
+ * $Id: SetCommand.java,v 1.25 2006-11-29 17:57:53 hzeller Exp $
  * author: Henner Zeller <H.Zeller@acm.org>
  */
 package henplus.commands;
@@ -17,6 +17,9 @@ import henplus.view.ColumnMetaData;
 import henplus.view.TableRenderer;
 import henplus.view.util.SortedMatchIterator;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -33,7 +36,8 @@ public final class SetCommand extends AbstractCommand {
 	private final static String SETTINGS_FILENAME = "settings";
 	private final static String SPECIAL_LAST_COMMAND = "_HENPLUS_LAST_COMMAND";
 	private final static ColumnMetaData[] SET_META;
-	
+	private static final String VAR_FROM_QUERY_COMMAND = "set-var-from-query";
+
 
 	static {
 		SET_META = new ColumnMetaData[2];
@@ -50,7 +54,7 @@ public final class SetCommand extends AbstractCommand {
 	 * returns the command-strings this command can handle.
 	 */
 	public String[] getCommandList() {
-		return new String[] { "set-var", "unset-var", "unset-all" };
+		return new String[] { "set-var", VAR_FROM_QUERY_COMMAND, "unset-var", "unset-all" };
 	}
 
 	public SetCommand(HenPlus henplus) {
@@ -75,7 +79,7 @@ public final class SetCommand extends AbstractCommand {
 	}
 
 	public boolean requiresValidSession(String cmd) {
-		return false;
+	    return VAR_FROM_QUERY_COMMAND.equals(cmd);
 	}
 
 	public Map getVariableMap() {
@@ -89,7 +93,7 @@ public final class SetCommand extends AbstractCommand {
 		StringTokenizer st = new StringTokenizer(param);
 		int argc = st.countTokens();
 
-		if ("set-var".equals(cmd)) {
+		if ("set-var".equals(cmd) || VAR_FROM_QUERY_COMMAND.equals(cmd)) {
 			/*
 			 * no args. only show.
 			 */
@@ -138,7 +142,16 @@ public final class SetCommand extends AbstractCommand {
 				} else if (value.startsWith("\'") && value.endsWith("\'")) {
 					value = value.substring(1, value.length() - 1);
 				}
-				setVariable(varname, value);
+                if ("set-var".equals(cmd)) {
+                    setVariable(varname, value);
+                } else if (VAR_FROM_QUERY_COMMAND.equals(cmd)) {
+                    try {
+                        setVariable(varname, executeSQL(currentSession, value));
+                    } catch (SQLException e) {
+                        System.err.println("Could not set " + varname + ". " + e.getMessage());
+                        return EXEC_FAILED;
+                    }
+                }
 				return SUCCESS;
 			}
 			return SYNTAX_ERROR;
@@ -165,6 +178,21 @@ public final class SetCommand extends AbstractCommand {
 		}
 		return SUCCESS;
 	}
+
+    private static String executeSQL(SQLSession currentSession, String sql) throws SQLException {
+        Statement stmt = currentSession.createStatement();
+        ResultSet rs = stmt.executeQuery(sql);
+        String result = sql;
+
+        if (!rs.next()) {
+            throw new SQLException("No row could be selected.");
+        }
+        result = rs.getObject(1).toString();
+
+        rs.close();
+        stmt.close();
+        return result;
+    }
 
 	private void setVariable(String name, String value) {
 		_variables.put(name, value);
@@ -199,7 +227,7 @@ public final class SetCommand extends AbstractCommand {
 		String cmd = (String) st.nextElement();
 		int argc = st.countTokens();
 		final HashSet alreadyGiven = new HashSet();
-		if ("set-var".equals(cmd)) {
+		if ("set-var".equals(cmd) || VAR_FROM_QUERY_COMMAND.equals(cmd)) {
 			if (argc > ("".equals(lastWord) ? 0 : 1)) {
 				return null;
 			}
@@ -240,8 +268,10 @@ public final class SetCommand extends AbstractCommand {
 
 	public String getSynopsis(String cmd) {
 		if ("set-var".equals(cmd)) {
-			return cmd + " [<varname> <value>]";
-		} else if ("unset-var".equals(cmd)) {
+            return cmd + " [<varname> <value>]";
+        } else if (VAR_FROM_QUERY_COMMAND.equals(cmd)) {
+            return cmd + " [<varname> <sql query>]";
+        } else if ("unset-var".equals(cmd)) {
 			return cmd + " <varname> [<varname> ..]";
 		} else if ("unset-all".equals(cmd)) {
 			return cmd;
@@ -264,6 +294,21 @@ public final class SetCommand extends AbstractCommand {
 					+ "\tidentifiers  containting  dollars  (esp. Oracle scripts)\n"
 					+ "\tIf you want to quote the dollarsign explicitly, write\n"
 					+ "\ttwo dollars: $$FOO means $FOO";
+		} else if (VAR_FROM_QUERY_COMMAND.equals(cmd)) {
+	        dsc= "\tWithout parameters,  show all  variable settings.  With\n"
+    			    +"\tparameters, set variable with name <varname> to value which\n"
+    			    +"\tis retrieved from the sql query. The first colomn from the\n"
+    			    +"\tfirst row is used to set the variable.\n"
+    			    +"\tVariables are  expanded in any  command you issue on the\n"
+    			    +"\tcommandline.  Variable expansion works like on the shell\n"
+    			    +"\twith the dollarsign. Both forms, $VARNAME and ${VARNAME},\n"
+    			    +"\tare supported.  If the variable is  _not_  set, then the\n"
+    			    +"\ttext is  left untouched.  So  if  there  is  no variable\n"
+    			    +"\t$VARNAME, then it is not replaced by an empty string but\n"
+    			    +"\tstays '$VARNAME'. This is because some scripts use wierd\n"
+    			    +"\tidentifiers  containting  dollars  (esp. Oracle scripts)\n"
+    			    +"\tIf you want to quote the dollarsign explicitly, write\n"
+    			    +"\ttwo dollars: $$FOO means $FOO";
 		} else if ("unset-var".equals(cmd)) {
 			dsc = "\tunset the variable with name <varname>. You may provide\n"
 					+ "\tmultiple variables to be unset.";
